@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cryptinity SafeZone</title>
+    
+    <!-- LIBRARIES -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- DESIGN SYSTEM -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        background: '#050505',
+                        surface: { 800: '#121212', 900: '#0A0A0A' },
+                        accent: { 400: '#34d399', 500: '#10b981' }
+                    },
+                    borderRadius: { 'squircle': '2.5rem' }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #050505; color: white; -webkit-tap-highlight-color: transparent; }
+        .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .loader { width: 20px; height: 20px; border: 2px solid #FFF; border-bottom-color: transparent; border-radius: 50%; animation: rot 1s linear infinite; }
+        @keyframes rot { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- CONFIGURATION ---
+        const SUPABASE_URL = "https://qmsxtoukvmldgaugrhqj.supabase.co";
+        // REPLACE THIS if the app fails to load data
+        const SUPABASE_KEY = "sb_publishable_p42sGxe63goAMeXDZprZtA_Vf1b-h0N"; 
+        
+        const CLOUD_NAME = "diywaczan";
+        const UPLOAD_PRESET = "Web4_Cryptinity";
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // --- COMPONENTS ---
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('feed'); // feed, create, profile
+            const [feed, setFeed] = useState([]);
+            const [cty, setCty] = useState(100);
+            const [loading, setLoading] = useState(true);
+
+            // Auth Check
+            useEffect(() => {
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                    if(session) initUser(session.user);
+                    else setLoading(false);
+                });
+                lucide.createIcons();
+            }, []);
+
+            const initUser = async (u) => {
+                setUser(u);
+                setLoading(false);
+                loadFeed();
+                
+                // Fetch Profile
+                const { data } = await supabase.from('user_profiles').select('cty_balance').eq('id', u.id).single();
+                if(data) setCty(data.cty_balance);
+            };
+
+            const loadFeed = async () => {
+                const { data } = await supabase.from('posts')
+                    .select('*, user_profiles(username, avatar_url)')
+                    .order('created_at', { ascending: false })
+                    .limit(20);
+                if(data) setFeed(data);
+            };
+
+            // Sign Up / Login Logic
+            const handleAuth = async (isSignup, email, password) => {
+                setLoading(true);
+                try {
+                    const { data, error } = isSignup 
+                        ? await supabase.auth.signUp({ email, password, options: { data: { username: email.split('@')[0] } } })
+                        : await supabase.auth.signInWithPassword({ email, password });
+                    
+                    if(error) throw error;
+                    if(data.user) initUser(data.user);
+                    else alert("Check your email to confirm!");
+                } catch(e) { alert(e.message); setLoading(false); }
+            };
+
+            // Create Logic
+            const handleCreate = async (type, content, fileOrPrompt) => {
+                if(cty < 25) return alert("Insufficient CTY!");
+                
+                let imageUrl = fileOrPrompt; // If prompt, we generate URL next
+
+                if(type === 'ai') {
+                    const seed = Math.floor(Math.random() * 99999);
+                    imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fileOrPrompt)}?width=1080&height=1080&seed=${seed}&nologo=true`;
+                }
+
+                // Optimistic UI
+                const newPost = { 
+                    id: Date.now(), 
+                    content: type === 'ai' ? fileOrPrompt : content, 
+                    image_url: imageUrl, 
+                    is_ai_generated: type === 'ai',
+                    user_profiles: { username: user?.email?.split('@')[0] || 'Me' },
+                    likes_count: 0
+                };
+                setFeed([newPost, ...feed]);
+                setCty(c => c - 25);
+                setView('feed');
+
+                // Real Save
+                await supabase.from('posts').insert({
+                    user_id: user.id,
+                    content: type === 'ai' ? fileOrPrompt : content,
+                    image_url: imageUrl,
+                    is_ai_generated: type === 'ai'
+                });
+            };
+
+            if (loading) return <div className="h-screen bg-background flex items-center justify-center text-accent-500">Loading SafeZone...</div>;
+            if (!user) return <AuthScreen onAuth={handleAuth} />;
+
+            return (
+                <div className="min-h-screen bg-background pb-24">
+                    
+                    {/* MOBILE TOP BAR */}
+                    {view !== 'profile' && (
+                        <div className="fixed top-0 w-full h-16 bg-background/90 backdrop-blur-md z-40 flex items-center justify-between px-5 border-b border-white/5 md:hidden">
+                            <div className="flex items-center gap-2 font-bold text-lg"><i data-lucide="sparkles" className="text-accent-400 w-5"></i> Cryptinity</div>
+                            <div className="px-3 py-1 bg-surface-800 rounded-full border border-white/10 text-xs font-bold flex gap-2">
+                                <i data-lucide="zap" className="w-3 text-yellow-400"></i> {cty}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MAIN CONTENT */}
+                    <main className={`max-w-xl mx-auto ${view === 'profile' ? '' : 'pt-20'} px-4 animate-fade-in`}>
+                        
+                        {view === 'feed' && (
+                            <div className="space-y-6">
+                                {feed.map((post, i) => (
+                                    <div key={i} className="glass-card rounded-3xl overflow-hidden p-0">
+                                        <div className="p-4 flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-surface-800 overflow-hidden">
+                                                    {post.user_profiles?.avatar_url ? <img src={post.user_profiles.avatar_url} className="w-full h-full object-cover"/> : <div className="w-full h-full flex items-center justify-center font-bold">U</div>}
+                                                </div>
+                                                <div>
+                                                    <h4 className="text-sm font-bold">{post.user_profiles?.username}</h4>
+                                                    <p className="text-xs text-gray-500">Just now</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {post.image_url && <img src={post.image_url} className="w-full h-auto object-cover max-h-[500px]" />}
+                                        <div className="p-4">
+                                            <p className="text-sm text-gray-300 mb-4">{post.content}</p>
+                                            <div className="flex gap-4 text-gray-500 text-sm">
+                                                <span>❤️ {post.likes_count}</span>
+                                                <span>💬 Comment</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {view === 'create' && <CreateScreen onCreate={handleCreate} cty={cty} />}
+                        
+                        {view === 'profile' && <ProfileScreen user={user} cty={cty} feed={feed} />}
+
+                    </main>
+
+                    {/* BOTTOM NAV */}
+                    <nav className="fixed bottom-0 w-full h-20 glass bg-background/90 z-50 flex items-center justify-around pb-2 md:hidden">
+                        <button onClick={()=>setView('feed')} className={view==='feed'?'text-accent-500':'text-gray-500'}><i data-lucide="home"></i></button>
+                        <button onClick={()=>setView('create')} className="relative -top-6 bg-accent-500 text-black p-4 rounded-full shadow-lg"><i data-lucide="plus"></i></button>
+                        <button onClick={()=>setView('profile')} className={view==='profile'?'text-accent-500':'text-gray-500'}><i data-lucide="user"></i></button>
+                    </nav>
+
+                </div>
+            );
+        };
+
+        // --- SUB-COMPONENTS ---
+        
+        const AuthScreen = ({ onAuth }) => {
+            const [isRegister, setIsRegister] = useState(false);
+            const [email, setEmail] = useState('');
+            const [pass, setPass] = useState('');
+            
+            return (
+                <div className="h-screen flex flex-col items-center justify-center p-6 bg-background">
+                    <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-accent-500 to-teal-800 flex items-center justify-center mb-6 shadow-2xl shadow-accent-500/20">
+                        <i data-lucide="shield" className="w-10 h-10 text-white"></i>
+                    </div>
+                    <h1 className="text-3xl font-bold mb-2">Cryptinity</h1>
+                    <p className="text-gray-500 mb-8">Enter the SafeZone.</p>
+                    <input className="w-full p-4 rounded-xl bg-surface-800 border border-white/10 mb-3 text-white outline-none focus:border-accent-500" placeholder="Email" onChange={e=>setEmail(e.target.value)}/>
+                    <input className="w-full p-4 rounded-xl bg-surface-800 border border-white/10 mb-6 text-white outline-none focus:border-accent-500" type="password" placeholder="Password" onChange={e=>setPass(e.target.value)}/>
+                    <button onClick={()=>onAuth(isRegister, email, pass)} className="w-full py-4 rounded-xl bg-accent-500 text-black font-bold mb-4">{isRegister ? 'Create Account' : 'Sign In'}</button>
+                    <p onClick={()=>setIsRegister(!isRegister)} className="text-sm text-gray-500 cursor-pointer">{isRegister ? 'Have an account? Login' : 'New? Create Account'}</p>
+                </div>
+            );
+        };
+
+        const CreateScreen = ({ onCreate, cty }) => {
+            const [prompt, setPrompt] = useState('');
+            return (
+                <div className="animate-fade-in">
+                    <h2 className="text-2xl font-bold mb-6">Create</h2>
+                    <div className="glass p-6 rounded-3xl mb-6">
+                        <div className="flex justify-between mb-4">
+                            <span className="text-accent-400 font-bold text-sm">AI Generator</span>
+                            <span className="text-xs font-mono text-gray-500">-25 CTY</span>
+                        </div>
+                        <textarea onChange={e=>setPrompt(e.target.value)} className="w-full h-32 bg-black/40 border border-white/10 rounded-xl p-4 text-white mb-4 outline-none focus:border-accent-500" placeholder="Describe your dream..."></textarea>
+                        <button onClick={()=>onCreate('ai', null, prompt)} className="w-full py-4 bg-accent-500 text-black font-bold rounded-xl hover:bg-accent-400 transition">Generate</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ProfileScreen = ({ user, cty, feed }) => {
+            return (
+                <div className="animate-fade-in w-full">
+                    <div className="relative w-full h-[40vh] overflow-hidden border-b border-white/10">
+                        <img src="https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=1200" className="w-full h-full object-cover opacity-60" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent"></div>
+                        <button className="absolute top-6 right-6 px-4 py-2 glass rounded-full text-xs font-bold flex items-center gap-2"><i data-lucide="music" className="w-4"></i> Theme Song</button>
+                    </div>
+                    
+                    <div className="px-6 -mt-24 relative z-10">
+                        <div className="w-44 h-44 rounded-squircle bg-[#0A0A0A] shadow-2xl overflow-hidden flex items-center justify-center">
+                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="mt-5">
+                            <h1 className="text-3xl font-bold">{user.email.split('@')[0]}</h1>
+                            <p className="text-accent-400 font-medium">@creator</p>
+                            <div className="flex gap-8 mt-6 pb-6 border-b border-white/10">
+                                <div><span className="font-bold text-lg">{feed.filter(p=>p.user_id===user.id).length}</span> <span className="text-xs text-gray-500 block uppercase">Posts</span></div>
+                                <div><span className="font-bold text-lg text-accent-400">{cty}</span> <span className="text-xs text-gray-500 block uppercase">Energy</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="px-4 mt-8 pb-24">
+                        <h3 className="font-bold mb-4">Showcase</h3>
+                        <div className="grid grid-cols-2 gap-3">
+                            {feed.filter(p=>p.user_id===user.id && p.is_ai_generated).map((p,i) => (
+                                <img key={i} src={p.image_url} className="aspect-square bg-surface-800 rounded-2xl object-cover border border-white/10" />
+                            ))}
+                            <div className="aspect-square bg-surface-800 rounded-2xl border border-white/10 border-dashed flex items-center justify-center text-gray-600"><i data-lucide="plus"></i></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
